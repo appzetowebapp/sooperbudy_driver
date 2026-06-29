@@ -87,13 +87,23 @@ class AppConfig {
   static const String notificationChannelDescription = 'Notifications from the website and push notifications';
 
   // Critical Notification channel ID (Android)
-  static const String criticalChannelId = 'critical_order_alerts_v6';
+  static const String criticalChannelId = 'critical_order_alerts_v10_sound';
 
   // Critical Notification channel name (Android)
   static const String criticalChannelName = 'New Order Alerts';
 
   // Critical Notification channel description (Android)
   static const String criticalChannelDescription = 'Urgent notifications for new restaurant orders';
+
+  // Critical Silent Notification channel ID (Android)
+  static const String criticalChannelSilentId = 'critical_order_alerts_v10_silent';
+
+  // Critical Silent Notification channel name (Android)
+  static const String criticalChannelSilentName = 'New Order Alerts (Silent)';
+
+  // Critical Silent Notification channel description (Android)
+  static const String criticalChannelSilentDescription =
+      'Urgent notifications for new restaurant orders (sound handled by service)';
 
   // Custom notification sound filename (without extension for Android)
   static const String notificationSoundName = 'order_ringtone';

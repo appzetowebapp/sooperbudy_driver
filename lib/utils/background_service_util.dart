@@ -11,111 +11,228 @@ Future<bool> onIosBackground(ServiceInstance service) async {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Top-level state — these values persist as long as the Dart isolate is alive.
+// flutter_background_service reuses the same Dart isolate across startService()
+// calls on some Android versions/OEMs, so we MUST cancel and re-register
+// subscriptions on every onStart() invocation instead of guarding with a flag.
+// ---------------------------------------------------------------------------
+AudioPlayer? _audioPlayer;
+bool _isRinging = false;
+Timer? _locationTimer;
+
+// Tracked subscriptions so we can cancel them before re-registering on restart.
+StreamSubscription<Map<String, dynamic>?>? _subSetFg;
+StreamSubscription<Map<String, dynamic>?>? _subSetBg;
+StreamSubscription<Map<String, dynamic>?>? _subStartRingtone;
+StreamSubscription<Map<String, dynamic>?>? _subStopRingtone;
+StreamSubscription<Map<String, dynamic>?>? _subStopService;
+
 @pragma('vm:entry-point')
-void onStart(ServiceInstance service) async {
+Future<void> onStart(ServiceInstance service) async {
+  WidgetsFlutterBinding.ensureInitialized();
   DartPluginRegistrant.ensureInitialized();
+  debugPrint('[RINGTONE_DEBUG] background_service_util onStart() triggered.');
 
-  AudioPlayer? audioPlayer;
-  bool isRinging = false;
+  // Create a single, persistent AudioPlayer for the lifetime of this service isolate
+  if (_audioPlayer == null) {
+    _audioPlayer = AudioPlayer();
+    try {
+      await _audioPlayer!.setAudioContext(
+        AudioContext(
+          android: const AudioContextAndroid(
+            usageType: AndroidUsageType.alarm,
+            contentType: AndroidContentType.sonification,
+            audioFocus: AndroidAudioFocus.gain,
+          ),
+        ),
+      );
+      await _audioPlayer!.setReleaseMode(ReleaseMode.loop);
+    } catch (e) {
+      debugPrint('[RINGTONE_DEBUG] Error configuring persistent AudioPlayer: $e');
+    }
+  }
 
+  // -------------------------------------------------------------------------
+  // STEP 1: Reset ringtone state and clean up any stale player on every start.
+  // -------------------------------------------------------------------------
+  debugPrint('[RINGTONE_DEBUG] Previous _isRinging=$_isRinging, stale player=${_audioPlayer != null}');
+
+  _isRinging = false;
+  debugPrint('[RINGTONE_DEBUG] State after reset: _isRinging=$_isRinging, player=${_audioPlayer != null}');
+
+  // -------------------------------------------------------------------------
+  // STEP 2: Cancel ALL existing subscriptions before re-registering.
+  // This is the core fix: prevents a) duplicate listeners on isolate reuse,
+  // and b) the "skipped second order" bug caused by the old _initialized guard
+  // that prevented listener re-registration after a stop/restart cycle.
+  // -------------------------------------------------------------------------
+  debugPrint('[RINGTONE_DEBUG] Cancelling existing event subscriptions before re-registering...');
+  await _subSetFg?.cancel();         _subSetFg = null;
+  await _subSetBg?.cancel();         _subSetBg = null;
+  await _subStartRingtone?.cancel(); _subStartRingtone = null;
+  await _subStopRingtone?.cancel();  _subStopRingtone = null;
+  await _subStopService?.cancel();   _subStopService = null;
+  _locationTimer?.cancel();          _locationTimer = null;
+  debugPrint('[RINGTONE_DEBUG] All previous subscriptions cancelled. Registering fresh listeners...');
+
+  // -------------------------------------------------------------------------
+  // STEP 3: Register foreground-service control listeners (Android only).
+  // -------------------------------------------------------------------------
   if (service is AndroidServiceInstance) {
-    service.on('setAsForeground').listen((event) {
+    _subSetFg = service.on('setAsForeground').listen((_) {
       service.setAsForegroundService();
     });
 
-    service.on('setAsBackground').listen((event) {
+    _subSetBg = service.on('setAsBackground').listen((_) {
       service.setAsBackgroundService();
     });
 
-    // Set initial notification content once
     service.setForegroundNotificationInfo(
-      title: "Indian Bite Restaurants Partner Service Active",
-      content: "Waiting for new orders...",
+      title: 'Indian Bite Restaurants Partner Service Active',
+      content: 'Waiting for new orders...',
     );
-
-    // Listen for ringtone start.
-    // NOTE: Do NOT call setForegroundNotificationInfo here.
-    // The foreground-service notification (ID 888) must stay as the generic
-    // "service is running" indicator. Changing it to order-related text creates
-    // a second notification that looks identical to the critical order alert
-    // already shown by showOrderNotification() — the duplicate the user sees.
-    service.on('startRingtone').listen((event) async {
-      if (!isRinging) {
-        debugPrint('🔔 Background Service: Starting Ringtone');
-        isRinging = true;
-        // Create a fresh player each time so there is no stale ExoPlayer state.
-        // Set the audio context on the new instance BEFORE loading the source so
-        // the notification-stream AudioAttributes are applied during preparation —
-        // this prevents the brief full-volume burst that occurs when attributes
-        // are applied after ExoPlayer has already started audio output.
-        audioPlayer = AudioPlayer();
-        await audioPlayer!.setAudioContext(
-          AudioContext(
-            android: const AudioContextAndroid(
-              contentType: AndroidContentType.sonification,
-              usageType: AndroidUsageType.notification,
-              audioFocus: AndroidAudioFocus.gainTransient,
-            ),
-            iOS: AudioContextIOS(
-              category: AVAudioSessionCategory.ambient,
-            ),
-          ),
-        );
-        await audioPlayer!.setReleaseMode(ReleaseMode.loop);
-        // setSource prepares the player (AudioAttributes already in place),
-        // then resume starts output — volume is correct from the very first frame.
-        await audioPlayer!.setSource(AssetSource('audio/iphone-remix-68028.mp3'));
-        await audioPlayer!.resume();
-      }
-    });
-
-    // Listen for ringtone stop
-    service.on('stopRingtone').listen((event) async {
-      if (isRinging) {
-        debugPrint('🔕 Background Service: Stopping Ringtone');
-        isRinging = false;
-        await audioPlayer?.stop();
-        await audioPlayer?.dispose();
-        audioPlayer = null;
-
-        // Reset notification info
-        service.setForegroundNotificationInfo(
-          title: "Indian Bite Restaurants Partner Service Active",
-          content: "Waiting for new orders...",
-        );
-      }
-    });
   }
 
-  service.on('stopService').listen((event) async {
-    await audioPlayer?.dispose();
-    audioPlayer = null;
-    service.stopSelf();
-  });
+  // -------------------------------------------------------------------------
+  // STEP 4: Register startRingtone listener (Android only).
+  // -------------------------------------------------------------------------
+  if (service is AndroidServiceInstance) {
+    _subStartRingtone = service.on('startRingtone').listen((event) async {
+      final orderId = event?['data']?['orderId']
+          ?? event?['data']?['order_id']
+          ?? 'unknown';
+      debugPrint('[RINGTONE_DEBUG] ── startRingtone received ──');
+      debugPrint('[RINGTONE_DEBUG] Order ID: $orderId');
 
-  // Location tracking logic (remains same)
-  Timer.periodic(const Duration(seconds: 15), (timer) async {
-    if (service is AndroidServiceInstance) {
-      if (!(await service.isForegroundService())) {
+      if (_isRinging) {
+        debugPrint('[RINGTONE_DEBUG] Ringtone start skipped reason: already playing');
         return;
       }
+
+      // Start fresh playback
+      _isRinging = true;
+      debugPrint('[RINGTONE_DEBUG] Playing persistent AudioPlayer for order $orderId...');
+      try {
+        // Always create a fresh player if the previous one was disposed
+        if (_audioPlayer == null) {
+          _audioPlayer = AudioPlayer();
+          try {
+            await _audioPlayer!.setAudioContext(
+              AudioContext(
+                android: const AudioContextAndroid(
+                  usageType: AndroidUsageType.alarm,
+                  contentType: AndroidContentType.sonification,
+                  audioFocus: AndroidAudioFocus.gain,
+                ),
+              ),
+            );
+          } catch (_) {}
+          await _audioPlayer!.setReleaseMode(ReleaseMode.loop);
+        }
+        await _audioPlayer!.play(AssetSource('audio/order_ringtone.mp3'));
+        debugPrint('[RINGTONE_DEBUG] Ringtone started successfully. _isRinging=$_isRinging');
+      } catch (e, stack) {
+        debugPrint('[RINGTONE_DEBUG] Error starting ringtone: $e');
+        debugPrint('[RINGTONE_DEBUG] Stack: $stack');
+        // Player may be in a bad state — dispose and null so next attempt recreates it
+        try { await _audioPlayer?.dispose(); } catch (_) {}
+        _audioPlayer = null;
+        _isRinging = false;
+      }
+    });
+    debugPrint('[RINGTONE_DEBUG] startRingtone listener registered ✓');
+  }
+
+  // -------------------------------------------------------------------------
+  // STEP 5: Register stopRingtone listener (Android only).
+  // -------------------------------------------------------------------------
+  if (service is AndroidServiceInstance) {
+    _subStopRingtone = service.on('stopRingtone').listen((event) async {
+      final String reason = event?['reason']?.toString() ?? 'Unknown';
+      debugPrint('[RINGTONE_DEBUG] ── stopRingtone received ──');
+      debugPrint('[RINGTONE_DEBUG] Reason: $reason');
+
+      _isRinging = false;
+
+      // Dispose the player fully so native MediaPlayer resources are released.
+      // A fresh player will be created on the next startRingtone event.
+      final player = _audioPlayer;
+      _audioPlayer = null;
+      if (player != null) {
+        try {
+          await player.stop();
+        } catch (_) {}
+        try {
+          await player.dispose();
+        } catch (_) {}
+      }
+
+      debugPrint('[RINGTONE_DEBUG] Ringtone stopped and player disposed. State after stop: _isRinging=$_isRinging');
+
+      try {
+        service.setForegroundNotificationInfo(
+          title: 'Indian Bite Restaurants Partner Service Active',
+          content: 'Waiting for new orders...',
+        );
+      } catch (_) {}
+    });
+    debugPrint('[RINGTONE_DEBUG] stopRingtone listener registered ✓');
+  }
+
+  // -------------------------------------------------------------------------
+  // STEP 6: Register stopService listener (all platforms).
+  // -------------------------------------------------------------------------
+  _subStopService = service.on('stopService').listen((event) async {
+    debugPrint('[RINGTONE_DEBUG] ── stopService received ──');
+    _locationTimer?.cancel();
+    _locationTimer = null;
+    _isRinging = false;
+
+    try {
+      if (_audioPlayer != null) {
+        await _audioPlayer!.stop();
+        await _audioPlayer!.dispose(); // Dispose only on full service stop
+        _audioPlayer = null;
+      }
+    } catch (_) {}
+
+    // Cancel all subscriptions cleanly before stopping
+    await _subSetFg?.cancel();         _subSetFg = null;
+    await _subSetBg?.cancel();         _subSetBg = null;
+    await _subStartRingtone?.cancel(); _subStartRingtone = null;
+    await _subStopRingtone?.cancel();  _subStopRingtone = null;
+    // Note: _subStopService cancels itself by stopping the service below
+
+    debugPrint('[RINGTONE_DEBUG] Service stopped cleanly. _isRinging=$_isRinging, player=${_audioPlayer != null}');
+    service.stopSelf();
+  });
+  debugPrint('[RINGTONE_DEBUG] stopService listener registered ✓');
+
+  // -------------------------------------------------------------------------
+  // STEP 7: Location tracking timer (reset and restart every onStart call).
+  // -------------------------------------------------------------------------
+  _locationTimer = Timer.periodic(const Duration(seconds: 15), (timer) async {
+    if (service is AndroidServiceInstance) {
+      if (!(await service.isForegroundService())) return;
 
       try {
         final position = await Geolocator.getCurrentPosition(
             desiredAccuracy: LocationAccuracy.high);
-        
+
         debugPrint('📍 Background Location: ${position.latitude}, ${position.longitude}');
-        
-        // Broadcast location update
+
         service.invoke('update', {
-          "latitude": position.latitude,
-          "longitude": position.longitude,
+          'latitude': position.latitude,
+          'longitude': position.longitude,
         });
       } catch (e) {
         debugPrint('❌ Background Location Error: $e');
       }
     }
   });
+
+  debugPrint('[RINGTONE_DEBUG] onStart() complete. All listeners registered and location timer started.');
 }
 
 @pragma('vm:entry-point')
@@ -145,7 +262,7 @@ class BackgroundServiceUtil {
 
   static Future<void> start() async {
     final service = FlutterBackgroundService();
-    var isRunning = await service.isRunning();
+    final isRunning = await service.isRunning();
     if (!isRunning) {
       await service.startService();
     }
@@ -153,7 +270,7 @@ class BackgroundServiceUtil {
 
   static Future<void> stop() async {
     final service = FlutterBackgroundService();
-    var isRunning = await service.isRunning();
+    final isRunning = await service.isRunning();
     if (isRunning) {
       service.invoke('stopService');
     }

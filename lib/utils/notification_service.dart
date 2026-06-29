@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -81,6 +82,25 @@ class NotificationService {
       return true;
     }
 
+    return false;
+  }
+
+  /// Check if the notification payload represents a cancellation or expiration event
+  static bool isCancelOrExpireNotification(Map<String, dynamic> data) {
+    final type = (data['type'] ?? data['notification_type'] ?? data['click_action'] ?? data['event'] ?? '')
+        .toString()
+        .toLowerCase()
+        .trim();
+    final title = (data['title'] ?? '').toString().toLowerCase().trim();
+    final body = (data['body'] ?? '').toString().toLowerCase().trim();
+
+    final cancelKeywords = ['cancel', 'expire', 'timeout', 'timed out', 'reject', 'decline'];
+    
+    for (final kw in cancelKeywords) {
+      if (type.contains(kw) || title.contains(kw) || body.contains(kw)) {
+        return true;
+      }
+    }
     return false;
   }
 
@@ -199,6 +219,11 @@ class NotificationService {
 
   /// Process foreground notifications systematically using precise validation filters
   Future<void> _handleForegroundMessage(RemoteMessage message) async {
+    if (PrefsUtil.getAccessToken() == null) {
+      debugPrint('⚠️ Foreground FCM message received while logged out. Ignoring.');
+      return;
+    }
+
     RemoteNotification? notification = message.notification;
     Map<String, dynamic> data = Map<String, dynamic>.from(message.data);
 
@@ -225,9 +250,35 @@ class NotificationService {
 
     if (_shownNotificationIds.contains(uniqueId)) return;
 
+    final type = (data['type'] ?? data['notification_type'] ?? data['click_action'] ?? data['event'] ?? '')
+        .toString()
+        .toLowerCase()
+        .trim();
+
+    debugPrint('Notification Type = $type');
+
+    if (type == 'new_order') {
+      final orderId = data['orderId'] ?? data['order_id'] ?? data['id'] ?? 'unknown';
+      debugPrint('[RINGTONE_DEBUG] new_order received (Foreground). Order ID: $orderId');
+    } else if (type == 'order_status_update') {
+      debugPrint('[RINGTONE_DEBUG] order_status_update received. Stopping ringtone. Reason: ORDER_STATUS_UPDATE');
+      await stopOrderAlertSound(reason: 'ORDER_STATUS_UPDATE');
+    } else if (isCancelOrExpireNotification(data) ||
+               type == 'order_accepted' ||
+               type == 'order_rejected' ||
+               type == 'order_cancelled' ||
+               type == 'order_expired') {
+      final orderId = data['orderId'] ?? data['order_id'] ?? data['id'] ?? 'unknown';
+      debugPrint('[RINGTONE_DEBUG] Order cancelled/expired/rejected FCM received (Foreground). Order ID: $orderId, type: $type');
+      debugPrint('[RINGTONE_DEBUG] Stopping ringtone. Reason: ORDER_CANCELLED ($type)');
+      await stopOrderAlertSound(reason: 'ORDER_CANCELLED ($type)');
+    }
+
     if (isNewOrderNotification(data)) {
+      final orderId = data['orderId'] ?? data['order_id'] ?? data['id'] ?? 'unknown';
       final orderTitle = notification?.title ?? data['title']?.toString() ?? 'New Order';
       final orderBody = notification?.body ?? data['body']?.toString() ?? 'You have a new delivery order';
+      debugPrint('[RINGTONE_DEBUG] new_order confirmed. Order ID: $orderId');
 
       await showOrderNotification(
         title: orderTitle,
@@ -237,21 +288,40 @@ class NotificationService {
         orderData: data,
       );
 
-      try {
-        final service = FlutterBackgroundService();
-        if (await service.isRunning()) {
-          service.invoke('startRingtone', {'title': orderTitle, 'body': orderBody});
-        } else {
-          // Service is not running (overlay/tracking was not enabled by the user).
-          // Start it on-demand so the ringtone can play — same pattern used by the
-          // FCM background handler to ensure consistent behaviour regardless of
-          // whether the app was in the foreground or background.
-          await service.startService();
-          await Future.delayed(const Duration(milliseconds: 1500));
-          service.invoke('startRingtone', {'title': orderTitle, 'body': orderBody});
+      if (type == 'new_order') {
+        final orderId2 = data['orderId'] ?? data['order_id'] ?? data['id'] ?? 'unknown';
+        try {
+          final service = FlutterBackgroundService();
+          final isSvcRunning = await service.isRunning();
+          debugPrint('[RINGTONE_DEBUG] Starting ringtone for order $orderId2. Service running: $isSvcRunning');
+
+          if (isSvcRunning) {
+            debugPrint('🔔 [FG] Service is running. Invoking "startRingtone" event.');
+            service.invoke('startRingtone', {'title': orderTitle, 'body': orderBody, 'nativeSoundPlaying': false});
+          } else {
+            // Service is not running (overlay/tracking was not enabled by the user).
+            // Start it on-demand so the ringtone can play — same pattern used by the
+            // FCM background handler to ensure consistent behaviour regardless of
+            // whether the app was in the foreground or background.
+            debugPrint('🔔 [FG] Service is NOT running. Attempting to start service on-demand...');
+            try {
+              await service.startService();
+              debugPrint('✅ [FG] service.startService() successfully called. Waiting 1500ms for isolate startup...');
+              await Future.delayed(const Duration(milliseconds: 1500));
+              // nativeSoundPlaying: false — service was started fresh from foreground,
+              // so the service AudioPlayer must handle looping (no native channel sound was playing).
+              debugPrint('🔔 [FG] Invoking "startRingtone" event post-service start (nativeSoundPlaying: false).');
+              service.invoke('startRingtone', {'title': orderTitle, 'body': orderBody, 'nativeSoundPlaying': false});
+            } catch (serviceStartError, serviceStartStack) {
+              debugPrint('⚠️ [FG] Failed to start background service: $serviceStartError');
+              debugPrint('⚠️ [FG] Stack: $serviceStartStack');
+              debugPrint('ℹ️ [FG] Relying on native notification channel sound fallback since background service start failed.');
+            }
+          }
+        } catch (e, stack) {
+          debugPrint('❌ [FG] General error invoking background service ringtone logic: $e');
+          debugPrint('❌ [FG] Stack: $stack');
         }
-      } catch (e) {
-        debugPrint('⚠️ Could not start background ringtone: $e');
       }
 
       _markNotificationShown(uniqueId);
@@ -343,6 +413,19 @@ class NotificationService {
         AppConfig.criticalChannelName,
         description: AppConfig.criticalChannelDescription,
         importance: Importance.max,
+        playSound: true,
+        sound: RawResourceAndroidNotificationSound('order_ringtone'),
+        enableVibration: true,
+        showBadge: true,
+        enableLights: true,
+        ledColor: Colors.red,
+      );
+
+      const AndroidNotificationChannel criticalChannelSilent = AndroidNotificationChannel(
+        AppConfig.criticalChannelSilentId,
+        AppConfig.criticalChannelSilentName,
+        description: AppConfig.criticalChannelSilentDescription,
+        importance: Importance.max,
         playSound: false,
         enableVibration: true,
         showBadge: true,
@@ -357,10 +440,12 @@ class NotificationService {
         await androidImplementation.deleteNotificationChannel(AppConfig.notificationChannelId);
         await androidImplementation.deleteNotificationChannel(AppConfig.silentChannelId);
         await androidImplementation.deleteNotificationChannel(AppConfig.criticalChannelId);
+        await androidImplementation.deleteNotificationChannel(AppConfig.criticalChannelSilentId);
 
         await androidImplementation.createNotificationChannel(standardChannel);
         await androidImplementation.createNotificationChannel(silentChannel);
         await androidImplementation.createNotificationChannel(criticalChannel);
+        await androidImplementation.createNotificationChannel(criticalChannelSilent);
       }
     } catch (e) {
       debugPrint('❌ Error creating notification channel: $e');
@@ -451,18 +536,46 @@ class NotificationService {
     final android = _notificationsPlugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
     await NewOrderNotificationUtil.ensureCriticalChannel(android);
 
+    final service = FlutterBackgroundService();
+    final bool serviceRunning = await service.isRunning();
+
     await _notificationsPlugin.show(
       localId,
       title,
       body,
-      NewOrderNotificationUtil.buildDetails(),
+      NewOrderNotificationUtil.buildDetails(playSound: false), // Always false so OS doesn't auto-stop sound on tap
       payload: payload,
     );
   }
 
-  Future<void> stopOrderAlertSound() async {
+  Future<void> stopOrderAlertSound({String reason = 'Unknown'}) async {
+    debugPrint('[RINGTONE_DEBUG] Ringtone stopped. Reason: $reason');
     try {
-      FlutterBackgroundService().invoke('stopRingtone');
+      FlutterBackgroundService().invoke('stopRingtone', {'reason': reason});
+      
+      // Stop the fallback player in the FCM background isolate
+      final bgPort = IsolateNameServer.lookupPortByName('bg_fcm_audio_port');
+      if (bgPort != null) {
+        debugPrint('[RINGTONE_DEBUG] Sending stop message to bg_fcm_audio_port');
+        bgPort.send('stop');
+      }
+      
+      await cancelAllNotifications();
+      
+      try {
+        // Initialize PrefsUtil in case we are in the background isolate where it wasn't initialized
+        await PrefsUtil.init();
+        if (!PrefsUtil.isOverlayEnabled()) {
+          debugPrint('ℹ️ Overlay disabled. Stopping background service.');
+          await Future.delayed(const Duration(milliseconds: 500));
+          final service = FlutterBackgroundService();
+          if (await service.isRunning()) {
+            service.invoke('stopService');
+          }
+        }
+      } catch (e) {
+        debugPrint('⚠️ Error stopping service in stopOrderAlertSound: $e');
+      }
     } catch (_) {}
   }
 
@@ -475,5 +588,29 @@ class NotificationService {
     } catch (e) {
       debugPrint('⚠️ cancelAllNotifications: $e');
     }
+  }
+
+  /// Handle user logout sequence.
+  /// Deletes the local FCM token from Firebase SDK, stops the order ringtone,
+  /// clears all active notifications, and wipes native preferences.
+  Future<void> handleLogout() async {
+    debugPrint('🔔 NotificationService: Logging out, unregistering FCM token...');
+    try {
+      if (_firebaseMessaging == null) {
+        _firebaseMessaging = FirebaseMessaging.instance;
+      }
+      await _firebaseMessaging?.deleteToken();
+      debugPrint('✅ FCM token deleted from Firebase SDK successfully');
+    } catch (e) {
+      debugPrint('❌ Error deleting FCM token: $e');
+    }
+
+    // Stop active alarms and notifications
+    await stopOrderAlertSound();
+    await cancelAllNotifications();
+
+    // Clear saved credentials
+    await PrefsUtil.clearAccessToken();
+    await PrefsUtil.clearPhoneNumber();
   }
 }

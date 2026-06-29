@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:webview_master_app/config/app_config.dart';
 
 /// Shared helpers for urgent new-order tray notifications (foreground + background).
@@ -48,35 +49,62 @@ class NewOrderNotificationUtil {
     AndroidFlutterLocalNotificationsPlugin? android,
   ) async {
     if (android == null) return;
-    await android.createNotificationChannel(
-      const AndroidNotificationChannel(
-        AppConfig.criticalChannelId,
-        AppConfig.criticalChannelName,
-        description: AppConfig.criticalChannelDescription,
-        importance: Importance.max,
-        playSound: false,
-        enableVibration: true,
-        showBadge: true,
-        enableLights: true,
-        ledColor: Colors.red,
-      ),
-    );
-    debugPrint('✅ Critical notification channel ensured: ${AppConfig.criticalChannelId}');
+    try {
+      debugPrint('ℹ️ Ensuring critical notification channels (sound: "${AppConfig.criticalChannelId}", silent: "${AppConfig.criticalChannelSilentId}")');
+      
+      // Sound critical channel (fallback)
+      await android.createNotificationChannel(
+        const AndroidNotificationChannel(
+          AppConfig.criticalChannelId,
+          AppConfig.criticalChannelName,
+          description: AppConfig.criticalChannelDescription,
+          importance: Importance.max,
+          playSound: true,
+          sound: RawResourceAndroidNotificationSound('order_ringtone'),
+          enableVibration: true,
+          showBadge: true,
+          enableLights: true,
+          ledColor: Colors.red,
+        ),
+      );
+
+      // Silent critical channel (primary, sound played by service)
+      await android.createNotificationChannel(
+        const AndroidNotificationChannel(
+          AppConfig.criticalChannelSilentId,
+          AppConfig.criticalChannelSilentName,
+          description: AppConfig.criticalChannelSilentDescription,
+          importance: Importance.max,
+          playSound: false,
+          enableVibration: true,
+          showBadge: true,
+          enableLights: true,
+          ledColor: Colors.red,
+        ),
+      );
+
+      debugPrint('✅ Critical notification channels ensured');
+    } catch (e, stack) {
+      debugPrint('❌ Error ensuring critical notification channels: $e');
+      debugPrint('$stack');
+    }
   }
 
-  static NotificationDetails buildDetails() {
-    return const NotificationDetails(
+  static NotificationDetails buildDetails({required bool playSound}) {
+    debugPrint('ℹ️ Building NotificationDetails (playSound: $playSound) for critical channel (sound: "${AppConfig.criticalChannelId}", silent: "${AppConfig.criticalChannelSilentId}")');
+    return NotificationDetails(
       android: AndroidNotificationDetails(
-        AppConfig.criticalChannelId,
-        AppConfig.criticalChannelName,
-        channelDescription: AppConfig.criticalChannelDescription,
+        playSound ? AppConfig.criticalChannelId : AppConfig.criticalChannelSilentId,
+        playSound ? AppConfig.criticalChannelName : AppConfig.criticalChannelSilentName,
+        channelDescription: playSound ? AppConfig.criticalChannelDescription : AppConfig.criticalChannelSilentDescription,
         importance: Importance.max,
         priority: Priority.max,
-        playSound: false,
+        playSound: playSound,
+        sound: playSound ? const RawResourceAndroidNotificationSound('order_ringtone') : null,
         enableVibration: true,
         icon: AppConfig.notificationIcon,
         visibility: NotificationVisibility.public,
-        styleInformation: BigTextStyleInformation(''),
+        styleInformation: const BigTextStyleInformation(''),
         colorized: true,
         color: Colors.red,
         showWhen: true,
@@ -84,8 +112,11 @@ class NewOrderNotificationUtil {
         ongoing: false,
         channelShowBadge: true,
         ticker: 'New order received',
+        additionalFlags: playSound ? Int32List.fromList(<int>[4]) : null, // FLAG_INSISTENT (loops sound until dismissed/clicked)
+        audioAttributesUsage: AudioAttributesUsage.alarm, // Directs OS to treat this as alarm (respects user alarms, bypasses standard muting)
+        category: AndroidNotificationCategory.alarm, // Higher visibility/DND bypass capability
       ),
-      iOS: DarwinNotificationDetails(
+      iOS: const DarwinNotificationDetails(
         presentAlert: true,
         presentBadge: true,
         presentSound: true,
@@ -125,14 +156,17 @@ class NewOrderNotificationUtil {
           AndroidFlutterLocalNotificationsPlugin>();
       await ensureCriticalChannel(android);
 
+      final service = FlutterBackgroundService();
+      final bool serviceRunning = await service.isRunning();
+
       await plugin.show(
         id,
         title,
         body,
-        buildDetails(),
+        buildDetails(playSound: !serviceRunning),
         payload: payload,
       );
-      debugPrint('✅ Tray notification posted (id=$id): $title | $body');
+      debugPrint('✅ Tray notification posted (id=$id, playSound=${!serviceRunning}): $title | $body');
       return true;
     } catch (e, stack) {
       debugPrint('❌ Failed to post tray notification: $e');

@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -56,12 +57,13 @@ void main() async {
   try {
     await BackgroundServiceUtil.initializeService();
     
-    // Only start if user has it enabled in preferences
-    if (PrefsUtil.isOverlayEnabled()) {
+    // Start if user has it enabled in preferences OR user is logged in
+    final isLoggedIn = PrefsUtil.getAccessToken() != null;
+    if (PrefsUtil.isOverlayEnabled() || isLoggedIn) {
       await BackgroundServiceUtil.start();
-      debugPrint('✅ Background service initialized and started (persisted state: ON)');
+      debugPrint('✅ Background service initialized and started (Overlay enabled: ${PrefsUtil.isOverlayEnabled()}, Is Logged In: $isLoggedIn)');
     } else {
-      debugPrint('ℹ️ Background service initialized but NOT started (persisted state: OFF)');
+      debugPrint('ℹ️ Background service initialized but NOT started (Overlay disabled and User logged out)');
     }
   } catch (e) {
     debugPrint('❌ Error initializing background service: $e');
@@ -109,8 +111,38 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      debugPrint('📱 App resumed: Stopping order ringtone (keeping tray notifications)');
-      NotificationService().stopOrderAlertSound();
+      debugPrint('📱 App resumed: Keeping order ringtone active (requires explicit user action to stop)');
+      // NotificationService().stopOrderAlertSound(); // Stopped only on Accept/Reject/Cancel/Expire
+    } else if (state == AppLifecycleState.detached) {
+      // App is being terminated (e.g. swiped away from Recent Apps).
+      // Stop the ringtone immediately and release all audio resources.
+      debugPrint('📱 App detached (swiped from recents): Stopping ringtone and releasing resources.');
+      _stopAllRingtoneResources();
+    }
+  }
+
+  /// Stop ringtone from all sources when the app is terminated.
+  /// Covers: background service AudioPlayer, FCM fallback isolate AudioPlayer,
+  /// and cancels all active notifications.
+  void _stopAllRingtoneResources() {
+    try {
+      // 1. Stop via background service
+      final service = FlutterBackgroundService();
+      service.invoke('stopRingtone', {'reason': 'App removed from recents'});
+      debugPrint('📱 Sent stopRingtone to background service.');
+
+      // 2. Stop the FCM fallback isolate player via inter-isolate port
+      final bgPort = IsolateNameServer.lookupPortByName('bg_fcm_audio_port');
+      if (bgPort != null) {
+        bgPort.send('stop');
+        debugPrint('📱 Sent stop to bg_fcm_audio_port.');
+      }
+
+      // 3. Cancel all system notifications
+      NotificationService().cancelAllNotifications();
+      debugPrint('📱 Cancelled all notifications.');
+    } catch (e) {
+      debugPrint('⚠️ Error stopping ringtone on app detach: $e');
     }
   }
 

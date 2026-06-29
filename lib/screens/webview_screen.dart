@@ -2540,18 +2540,79 @@ class _WebViewScreenState extends State<WebViewScreen>
             }
           }
 
+          // 1. Intercept localStorage mutations for auth tokens
+          try {
+            var tokenKeys = ['accessToken', 'token', 'auth_token'];
+            
+            var originalRemoveItem = localStorage.removeItem;
+            localStorage.removeItem = function(key) {
+              if (tokenKeys.includes(key)) {
+                callFlutterHandler('onLogout');
+              }
+              return originalRemoveItem.apply(this, arguments);
+            };
+
+            var originalClear = localStorage.clear;
+            localStorage.clear = function() {
+              callFlutterHandler('onLogout');
+              return originalClear.apply(this, arguments);
+            };
+
+            var originalSetItem = localStorage.setItem;
+            localStorage.setItem = function(key, value) {
+              if (tokenKeys.includes(key) && (!value || value === 'null' || value === 'undefined')) {
+                callFlutterHandler('onLogout');
+              }
+              return originalSetItem.apply(this, arguments);
+            };
+
+            // Periodic fallback check (interval of 1.5 seconds)
+            var lastCheckedToken = localStorage.getItem('accessToken') || localStorage.getItem('token') || localStorage.getItem('auth_token');
+            setInterval(function() {
+              var currentToken = localStorage.getItem('accessToken') || localStorage.getItem('token') || localStorage.getItem('auth_token');
+              if (lastCheckedToken && !currentToken) {
+                console.log('🔄 Token disappeared from localStorage - triggering onLogout');
+                callFlutterHandler('onLogout');
+              }
+              lastCheckedToken = currentToken;
+            }, 1500);
+          } catch(e) {
+            console.error('Error setting up localStorage interceptors:', e);
+          }
+
+          function checkAndStopSoundCalled(url) {
+            if (url && /\/orders\/(?:[^\/]+\/)?(accept|reject|decline|cancel)\b/i.test(url)) {
+              callFlutterHandler('onOrderApiCalled', url);
+            }
+          }
+
+          function checkAndStopSoundSuccess(url, status) {
+            if (url && /\/orders\/(?:[^\/]+\/)?(accept|reject|decline|cancel)\b/i.test(url)) {
+              if (status === 200 || status === 201) {
+                callFlutterHandler('onOrderApiSuccess', url);
+              }
+            }
+          }
+
           // Intercept fetch API
           var originalFetch = window.fetch;
           window.fetch = async function(url, options) {
             var urlString = typeof url === 'string' ? url : url.url || url.toString();
+            checkAndStopSoundCalled(urlString);
             var isLogin = urlString.includes('/auth/login') || 
                           urlString.includes('/users/login') ||
                           urlString.includes('/auth/signup-verify') ||
                           urlString.includes('/v1/food/auth/restaurant/verify-otp');
             
+            var isLogout = urlString.includes('/logout') || urlString.includes('/signout');
+            if (isLogout) {
+              callFlutterHandler('onLogout');
+            }
+            
             // Call original fetch
             try {
               var response = await originalFetch.apply(this, arguments);
+              checkAndStopSoundSuccess(urlString, response.status);
               
               // Clone the response to read it without consuming the original stream
               var clone = response.clone();
@@ -2586,6 +2647,11 @@ class _WebViewScreenState extends State<WebViewScreen>
           XMLHttpRequest.prototype.send = function(data) {
             var self = this;
             var url = this._url;
+            checkAndStopSoundCalled(url);
+            
+            this.addEventListener('load', function() {
+              checkAndStopSoundSuccess(url, self.status);
+            });
             
             if (url && (url.includes('/auth/login') || 
                         url.includes('/users/login') ||
@@ -2608,6 +2674,10 @@ class _WebViewScreenState extends State<WebViewScreen>
                      console.error('Error capturing XHR login response:', e);
                   }
                });
+            }
+
+            if (url && (url.includes('/logout') || url.includes('/signout'))) {
+               callFlutterHandler('onLogout');
             }
             
             return originalXHRSend.apply(this, arguments);
@@ -2657,6 +2727,13 @@ class _WebViewScreenState extends State<WebViewScreen>
                       '✅ Found Access Token: ${accessToken.substring(0, 15)}...');
 
                   await PrefsUtil.setAccessToken(accessToken);
+                  
+                  try {
+                    debugPrint('🔔 Login Captured: Starting background service...');
+                    await BackgroundServiceUtil.start();
+                  } catch (serviceStartError) {
+                    debugPrint('⚠️ Error starting background service post-login: $serviceStartError');
+                  }
 
                   final cleanedPhone = _extractPhoneFromLoginBody(body);
                   if (cleanedPhone != null) {
@@ -3529,6 +3606,71 @@ class _WebViewScreenState extends State<WebViewScreen>
                       onWebViewCreated: (controller) async {
                         _webViewController = controller;
                         debugPrint('✅ WebView created');
+
+                        // The website JS may call 'stopOrderAlertSound' directly on button tap
+                        // (before the API call completes). We intentionally ignore this —
+                        // the ringtone must only stop after a confirmed API success (HTTP 200/201)
+                        // via the onOrderApiSuccess handler below.
+                        controller.addJavaScriptHandler(
+                          handlerName: 'stopOrderAlertSound',
+                          callback: (args) {
+                            debugPrint('[RINGTONE_DEBUG] Web JS called stopOrderAlertSound — IGNORED (ringtone stops only on confirmed API success, not button tap)');
+                            // Do NOT stop the ringtone here.
+                          },
+                        );
+
+                        // Register onLogout handler for session invalidation
+                        controller.addJavaScriptHandler(
+                          handlerName: 'onLogout',
+                          callback: (args) async {
+                            debugPrint('🔐 Web JS requested logout: unregistering FCM and clearing session');
+                            await NotificationService().handleLogout();
+                          },
+                        );
+
+                        controller.addJavaScriptHandler(
+                          handlerName: 'onOrderApiCalled',
+                          callback: (args) {
+                            final url = args.isNotEmpty ? args[0].toString() : 'Unknown';
+                            final isAccept = url.toLowerCase().contains('accept');
+                            final isReject = url.toLowerCase().contains('reject') ||
+                                            url.toLowerCase().contains('decline') ||
+                                            url.toLowerCase().contains('cancel');
+                            if (isAccept) {
+                              debugPrint('[RINGTONE_DEBUG] Accept API called: $url (waiting for success response before stopping ringtone)');
+                            } else if (isReject) {
+                              debugPrint('[RINGTONE_DEBUG] Reject API called: $url (waiting for success response before stopping ringtone)');
+                            } else {
+                              debugPrint('[RINGTONE_DEBUG] Order API called: $url');
+                            }
+                          },
+                        );
+
+                        controller.addJavaScriptHandler(
+                          handlerName: 'onOrderApiSuccess',
+                          callback: (args) async {
+                            final url = args.isNotEmpty ? args[0].toString() : 'Unknown';
+                            final isAccept = url.toLowerCase().contains('accept');
+                            final isReject = url.toLowerCase().contains('reject') ||
+                                             url.toLowerCase().contains('decline') ||
+                                             url.toLowerCase().contains('cancel');
+                            final String stopReason;
+                            if (isAccept) {
+                              stopReason = 'ACCEPT';
+                              debugPrint('[RINGTONE_DEBUG] Accept API success (HTTP 200/201): $url');
+                              debugPrint('[RINGTONE_DEBUG] Stopping ringtone. Reason: $stopReason');
+                            } else if (isReject) {
+                              stopReason = 'REJECT';
+                              debugPrint('[RINGTONE_DEBUG] Reject API success (HTTP 200/201): $url');
+                              debugPrint('[RINGTONE_DEBUG] Stopping ringtone. Reason: $stopReason');
+                            } else {
+                              stopReason = 'ORDER_API_SUCCESS: $url';
+                              debugPrint('[RINGTONE_DEBUG] Order API success: $url');
+                              debugPrint('[RINGTONE_DEBUG] Stopping ringtone. Reason: $stopReason');
+                            }
+                            await NotificationService().stopOrderAlertSound(reason: stopReason);
+                          },
+                        );
 
                         // Capture blobs created via URL.createObjectURL to bypass CSP
                         controller.addJavaScriptHandler(
@@ -4990,9 +5132,9 @@ class _WebViewScreenState extends State<WebViewScreen>
 
   /// Route an order tap to the WebView, queuing it if the page is still loading.
   void _handleOrderNotificationTap(Map<String, dynamic> data) {
-    // The user has acknowledged the order notification — stop the ringtone
-    // immediately so it doesn't keep playing while they view the order.
-    NotificationService().stopOrderAlertSound();
+    // The user has acknowledged the order notification — do NOT stop the ringtone here.
+    // The ringtone should continue playing until the user explicitly Accepts or Rejects.
+    // NotificationService().stopOrderAlertSound();
 
     if (_isWebViewReady && _webViewController != null) {
       _openOrderModalInWebView(data);

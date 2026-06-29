@@ -1,4 +1,7 @@
 import 'dart:ui';
+import 'dart:io' show Platform;
+import 'dart:isolate';
+import 'package:audioplayers/audioplayers.dart';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -7,6 +10,10 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:webview_master_app/utils/new_order_notification_util.dart';
 import 'package:webview_master_app/utils/notification_service.dart';
 import 'package:webview_master_app/utils/notification_payload_util.dart';
+import 'package:webview_master_app/utils/prefs_util.dart';
+
+AudioPlayer? _bgAudioPlayer;
+ReceivePort? _bgReceivePort;
 
 /// Background message handler for Firebase Cloud Messaging.
 /// Must be a top-level function — runs when app is backgrounded or terminated.
@@ -15,9 +22,43 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   WidgetsFlutterBinding.ensureInitialized();
   DartPluginRegistrant.ensureInitialized();
 
+  // Setup inter-isolate communication port to receive stop signals from main isolate
+  if (_bgReceivePort == null) {
+    if (IsolateNameServer.lookupPortByName('bg_fcm_audio_port') != null) {
+      IsolateNameServer.removePortNameMapping('bg_fcm_audio_port');
+    }
+    _bgReceivePort = ReceivePort();
+    IsolateNameServer.registerPortWithName(_bgReceivePort!.sendPort, 'bg_fcm_audio_port');
+    _bgReceivePort!.listen((msg) async {
+      debugPrint('[RINGTONE_DEBUG] Fallback BG Port received message: $msg');
+      if (msg == 'stop') {
+        final player = _bgAudioPlayer;
+        _bgAudioPlayer = null;
+        if (player != null) {
+          try {
+            debugPrint('[RINGTONE_DEBUG] Ringtone stop requested. Reason: Inter-isolate port stop command');
+            await player.stop();
+          } catch (_) {}
+          try {
+            await player.dispose();
+          } catch (_) {}
+        }
+      }
+    });
+  }
+
   try {
     await Firebase.initializeApp();
   } catch (_) {}
+
+  try {
+    await PrefsUtil.init();
+  } catch (_) {}
+
+  if (PrefsUtil.getAccessToken() == null) {
+    debugPrint('📨 [BG] Background message received but user is logged out. Ignoring.');
+    return;
+  }
 
   try {
     debugPrint('📨 [BG] Background message received');
@@ -35,9 +76,50 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       }
     }
 
-    final isNewOrder = NotificationService.isNewOrderNotification(data);
-    debugPrint('🔔 [BG] isNewOrder: $isNewOrder');
+    final type = (data['type'] ?? data['notification_type'] ?? data['click_action'] ?? data['event'] ?? '')
+        .toString()
+        .toLowerCase()
+        .trim();
 
+    debugPrint('Notification Type = $type');
+
+    if (type == 'new_order') {
+      debugPrint('=> Start ringtone');
+    } else if (type == 'order_status_update') {
+      debugPrint('=> Stop ringtone');
+      final serviceInstance = NotificationService();
+      await serviceInstance.initialize(isBackground: true);
+      await serviceInstance.stopOrderAlertSound(reason: 'Order status update FCM (Background)');
+      
+      // Stop the local player too
+      final player = _bgAudioPlayer;
+      _bgAudioPlayer = null;
+      if (player != null) {
+        debugPrint('[RINGTONE_DEBUG] Ringtone stop requested. Reason: Order status update FCM (Background)');
+        try { await player.stop(); } catch (_) {}
+        try { await player.dispose(); } catch (_) {}
+      }
+    } else if (NotificationService.isCancelOrExpireNotification(data) ||
+               type == 'order_accepted' ||
+               type == 'order_rejected' ||
+               type == 'order_cancelled' ||
+               type == 'order_expired') {
+      debugPrint('=> Stop ringtone');
+      final serviceInstance = NotificationService();
+      await serviceInstance.initialize(isBackground: true);
+      await serviceInstance.stopOrderAlertSound(reason: 'Order accepted/rejected/cancelled/expired FCM ($type) (Background)');
+      
+      // Stop the local player too
+      final player2 = _bgAudioPlayer;
+      _bgAudioPlayer = null;
+      if (player2 != null) {
+        debugPrint('[RINGTONE_DEBUG] Ringtone stop requested. Reason: Order accepted/rejected/cancelled/expired FCM ($type) (Background)');
+        try { await player2.stop(); } catch (_) {}
+        try { await player2.dispose(); } catch (_) {}
+      }
+    }
+
+    final isNewOrder = NotificationService.isNewOrderNotification(data);
     final title = NewOrderNotificationUtil.titleFrom(message, data);
     final body = NewOrderNotificationUtil.bodyFrom(message, data);
 
@@ -66,23 +148,70 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         orderData: data,
       );
 
-      try {
-        final service = FlutterBackgroundService();
-        final orderPayload = {
-          'title': title,
-          'body': body,
-          'data': data,
-        };
-        
-        if (await service.isRunning()) {
-          service.invoke('startRingtone', orderPayload);
-        } else {
-          await service.startService();
-          await Future.delayed(const Duration(milliseconds: 1500));
-          service.invoke('startRingtone', orderPayload);
+      if (type == 'new_order') {
+        try {
+          final service = FlutterBackgroundService();
+          final orderPayload = {
+            'title': title,
+            'body': body,
+            'data': data,
+            'nativeSoundPlaying': false,
+          };
+          
+          final isSvcRunning = await service.isRunning();
+          debugPrint('ℹ️ [BG] FlutterBackgroundService.isRunning() = $isSvcRunning. Android SDK version: ${Platform.isAndroid ? 'Android' : 'Other'}');
+          
+          if (isSvcRunning) {
+            debugPrint('🔔 [BG] Service is already running. Invoking "startRingtone" event (nativeSoundPlaying: false).');
+            service.invoke('startRingtone', orderPayload);
+          } else {
+            debugPrint('🔔 [BG] Service is NOT running. Attempting to start service from background state...');
+            final fallbackPayload = Map<String, dynamic>.from(orderPayload);
+            fallbackPayload['nativeSoundPlaying'] = false; // Always false, AudioPlayer must handle it
+            try {
+              await service.startService();
+              debugPrint('✅ [BG] service.startService() successfully called. Waiting 1500ms for isolate startup...');
+              await Future.delayed(const Duration(milliseconds: 1500));
+              debugPrint('🔔 [BG] Invoking "startRingtone" event post-service start (nativeSoundPlaying: false).');
+              service.invoke('startRingtone', fallbackPayload);
+            } catch (serviceStartError, serviceStartStack) {
+              debugPrint('⚠️ [BG] Failed to start background service (this is expected on Android 12+ background starts due to OS/OEM restrictions): $serviceStartError');
+              debugPrint('⚠️ [BG] Stack: $serviceStartStack');
+              debugPrint('ℹ️ [BG] Relying on fallback local AudioPlayer since background service start was restricted.');
+              
+              // Start local fallback player since background service failed to start
+              try {
+                if (_bgAudioPlayer != null) {
+                  debugPrint('[RINGTONE_DEBUG] Stale fallback player detected. Stopping before new start.');
+                  try {
+                    await _bgAudioPlayer!.stop();
+                  } catch (_) {}
+                } else {
+                  _bgAudioPlayer = AudioPlayer();
+                  await _bgAudioPlayer!.setAudioContext(
+                     AudioContext(
+                      android: AudioContextAndroid(
+                        usageType: AndroidUsageType.alarm,
+                        contentType: AndroidContentType.sonification,
+                        audioFocus: AndroidAudioFocus.gain,
+                      ),
+                    ),
+                  );
+                  await _bgAudioPlayer!.setReleaseMode(ReleaseMode.loop);
+                }
+                
+                debugPrint('[RINGTONE_DEBUG] Ringtone start requested. Isolate: BG Fallback Isolate, Path: assets/audio/order_ringtone.mp3');
+                await _bgAudioPlayer!.play(AssetSource('audio/order_ringtone.mp3'));
+                debugPrint('[RINGTONE_DEBUG] Ringtone loop status: Loop enabled (ReleaseMode.loop). Current state: Playing');
+              } catch (playerErr) {
+                debugPrint('[RINGTONE_DEBUG] Playback error: $playerErr');
+              }
+            }
+          }
+        } catch (e, stack) {
+          debugPrint('❌ [BG] General error invoking background service ringtone logic: $e');
+          debugPrint('❌ [BG] Stack: $stack');
         }
-      } catch (e) {
-        debugPrint('❌ [BG] Error invoking background service ringtone logic: $e');
       }
       return;
     }
