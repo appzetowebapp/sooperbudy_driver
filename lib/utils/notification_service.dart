@@ -30,7 +30,7 @@ class NotificationService {
   bool _isInitialized = false;
   bool _listenersRegistered = false;
   static const _platform =
-      MethodChannel('com.indians.bite.delivery/geolocation');
+      MethodChannel('com.buddyserviceappzeto.driver/geolocation');
 
   // Track shown notifications to prevent duplicates
   final Set<String> _shownNotificationIds = <String>{};

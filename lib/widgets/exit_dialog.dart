@@ -98,8 +98,8 @@ class _ExitDialogWidgetState extends State<_ExitDialogWidget>
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                     colors: [
-                      AppConfig.exitDialogButtonColor.withOpacity(0.2),
-                      AppConfig.exitDialogButtonColor.withOpacity(0.1),
+                      Colors.white.withOpacity(0.2),
+                      Colors.white.withOpacity(0.1),
                     ],
                   ),
                   shape: BoxShape.circle,
@@ -107,7 +107,7 @@ class _ExitDialogWidgetState extends State<_ExitDialogWidget>
                 child: const Icon(
                   Icons.logout_rounded,
                   size: 40,
-                  color: AppConfig.exitDialogButtonColor,
+                  color: Colors.black87,
                 ),
               ),
 
@@ -121,7 +121,7 @@ class _ExitDialogWidgetState extends State<_ExitDialogWidget>
                       ? AppConfig.exitDialogTitleColorDark
                       : AppConfig.exitDialogTitleColorLight,
                   fontWeight: FontWeight.bold,
-                  fontSize: 24,
+                  fontSize: 20,
                   letterSpacing: 0.5,
                 ),
               ),
@@ -136,7 +136,7 @@ class _ExitDialogWidgetState extends State<_ExitDialogWidget>
                   color: isDark
                       ? AppConfig.exitDialogTextColorDark
                       : AppConfig.exitDialogTextColorLight,
-                  fontSize: 16,
+                  fontSize: 14,
                   height: 1.5,
                 ),
               ),
@@ -175,7 +175,7 @@ class _ExitDialogWidgetState extends State<_ExitDialogWidget>
                         color: isDark
                             ? AppConfig.exitDialogCancelColorDark
                             : AppConfig.exitDialogCancelColorLight,
-                        fontSize: 16,
+                        fontSize: 14,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -192,15 +192,14 @@ class _ExitDialogWidgetState extends State<_ExitDialogWidget>
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                         colors: [
-                          AppConfig.exitDialogButtonColor,
-                          AppConfig.exitDialogButtonColor.withOpacity(0.8),
+                          Colors.red.shade400,
+                          Colors.red.shade600,
                         ],
                       ),
                       borderRadius: BorderRadius.circular(12),
                       boxShadow: [
                         BoxShadow(
-                          color:
-                              AppConfig.exitDialogButtonColor.withOpacity(0.3),
+                          color: Colors.red.withOpacity(0.3),
                           blurRadius: 8,
                           offset: const Offset(0, 4),
                         ),
@@ -220,7 +219,7 @@ class _ExitDialogWidgetState extends State<_ExitDialogWidget>
                       child: const Text(
                         'Exit',
                         style: TextStyle(
-                          fontSize: 16,
+                          fontSize: 14,
                           fontWeight: FontWeight.bold,
                           letterSpacing: 0.5,
                         ),

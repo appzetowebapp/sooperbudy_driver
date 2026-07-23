@@ -1919,7 +1919,7 @@ class WebViewScreen extends StatefulWidget {
 class _WebViewScreenState extends State<WebViewScreen>
     with WidgetsBindingObserver {
   static const platform =
-      MethodChannel('com.indians.bite.delivery/geolocation');
+      MethodChannel('com.buddyserviceappzeto.driver/geolocation');
   InAppWebViewController? _webViewController;
   bool _isLoading = true;
   double _loadingProgress = 0.0;
@@ -1927,6 +1927,8 @@ class _WebViewScreenState extends State<WebViewScreen>
   DateTime _lastUrlChangeTime = DateTime.now();
   DateTime? _lastResumeTime;
   bool _isOnline = true;
+  bool _hasError = false;
+  String? _lastFailedUrl;
   bool _isPageLoading = true;
   bool _phoneListenerInjected = false;
   bool _linkInterceptorInjected = false;
@@ -2598,7 +2600,7 @@ class _WebViewScreenState extends State<WebViewScreen>
             var isLogin = urlString.includes('/auth/login') || 
                           urlString.includes('/users/login') ||
                           urlString.includes('/auth/signup-verify') ||
-                          urlString.includes('/v1/food/auth/restaurant/verify-otp');
+                          urlString.includes('/v1/auth/verify-otp');
             
             var isLogout = urlString.includes('/logout') || urlString.includes('/signout');
             if (isLogout) {
@@ -2652,7 +2654,7 @@ class _WebViewScreenState extends State<WebViewScreen>
             if (url && (url.includes('/auth/login') || 
                         url.includes('/users/login') ||
                         url.includes('/auth/signup-verify') ||
-                        url.includes('/v1/food/auth/restaurant/verify-otp'))) {
+                        url.includes('/v1/auth/verify-otp'))) {
                this.addEventListener('load', function() {
                   try {
                     var responseBody = self.responseText;
@@ -2708,8 +2710,8 @@ class _WebViewScreenState extends State<WebViewScreen>
                 // 2. structure: { "token": "...", "data": { "user": { "phoneNumber": "..." } } }
 
                 String? accessToken = body['accessToken']?.toString();
-                if (accessToken == null && body['token'] != null) {
-                  accessToken = body['token'].toString();
+                if (accessToken == null && body['accessToken'] != null) {
+                  accessToken = body['accessToken'].toString();
                 }
                 // Check inside data object (new structure)
                 if (accessToken == null &&
@@ -2870,7 +2872,15 @@ class _WebViewScreenState extends State<WebViewScreen>
   Future<void> _retryLoad() async {
     await _checkConnectivity();
     if (_isOnline) {
-      _webViewController?.reload();
+      setState(() {
+        _hasError = false;
+        _isLoading = true;
+      });
+      if (_lastFailedUrl != null && _lastFailedUrl!.isNotEmpty) {
+        _webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri(_lastFailedUrl!)));
+      } else {
+        _webViewController?.reload();
+      }
     }
   }
 
@@ -3232,7 +3242,7 @@ class _WebViewScreenState extends State<WebViewScreen>
         body: SafeArea(
           child: Stack(
             children: [
-              if (_isOnline)
+              if (_isOnline && !_hasError)
                 Stack(
                   children: [
                     InAppWebView(
@@ -3943,8 +3953,21 @@ class _WebViewScreenState extends State<WebViewScreen>
                         _pullToRefreshController.endRefreshing();
                         setState(() {
                           _isLoading = false;
+                          _hasError = true;
+                          _lastFailedUrl = url?.toString();
                         });
                         debugPrint('❌ Load error: $message (code: $code)');
+                      },
+                      onReceivedError: (controller, request, error) {
+                        if (request.isForMainFrame ?? true) {
+                          _pullToRefreshController.endRefreshing();
+                          setState(() {
+                            _isLoading = false;
+                            _hasError = true;
+                            _lastFailedUrl = request.url.toString();
+                          });
+                          debugPrint('❌ Received error: ${error.description} (code: ${error.type})');
+                        }
                       },
                       onGeolocationPermissionsShowPrompt:
                           (controller, origin) async {

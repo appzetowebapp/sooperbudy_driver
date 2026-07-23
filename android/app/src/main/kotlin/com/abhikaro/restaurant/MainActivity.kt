@@ -1,4 +1,4 @@
-package com.indians.bite.delivery
+package com.buddyserviceappzeto.driver
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -14,7 +14,7 @@ import android.util.Log
 import androidx.core.app.NotificationManagerCompat
 
 class MainActivity: FlutterActivity() {
-    private val CHANNEL = "com.indians.bite.delivery/geolocation"
+    private val CHANNEL = "com.buddyserviceappzeto.driver/geolocation"
     private val LOCATION_PERMISSION_REQUEST_CODE = 1
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {

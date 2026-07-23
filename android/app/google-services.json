@@ -1,148 +1,65 @@
 {
   "project_info": {
-    "project_number": "56653289892",
-    "firebase_url": "https://indianbite-aab74-default-rtdb.asia-southeast1.firebasedatabase.app",
-    "project_id": "indianbite-aab74",
-    "storage_bucket": "indianbite-aab74.firebasestorage.app"
+    "project_number": "962903440763",
+    "firebase_url": "https://buddyserviceappzeto-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "buddyserviceappzeto",
+    "storage_bucket": "buddyserviceappzeto.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:56653289892:android:1ec3a68f12f72750e18931",
+        "mobilesdk_app_id": "1:962903440763:android:5cc714025fefddc92bd1de",
         "android_client_info": {
-          "package_name": "com.indians.bite.delivery"
+          "package_name": "com.buddyserviceappzeto.driver"
         }
       },
-      "oauth_client": [
-        {
-          "client_id": "56653289892-g88coo4d7ao9gcnge6aplha1oviva369.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.indians.bite.delivery",
-            "certificate_hash": "eafa3773d53abcec8d5f2093119cb978efce98b1"
-          }
-        },
-        {
-          "client_id": "56653289892-tt0imk1bgrvl38alje1kk1t9vblkg0pi.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
+      "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyCwrmt7PmLxHwApAi1it-qj0mwW_C4aXfY"
+          "current_key": "AIzaSyC9yyoOwDQSzXel4hizGD4jXS6ovJZzwV4"
         }
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "56653289892-tt0imk1bgrvl38alje1kk1t9vblkg0pi.apps.googleusercontent.com",
-              "client_type": 3
-            },
-            {
-              "client_id": "56653289892-d6ct9bm7mv6tn1pbinl676ql812gqpo8.apps.googleusercontent.com",
-              "client_type": 2,
-              "ios_info": {
-                "bundle_id": "com.go4food.driver"
-              }
-            }
-          ]
+          "other_platform_oauth_client": []
         }
       }
     },
     {
       "client_info": {
-        "mobilesdk_app_id": "1:56653289892:android:6b21401c44b66cfee18931",
+        "mobilesdk_app_id": "1:962903440763:android:d4e0019d92f186592bd1de",
         "android_client_info": {
-          "package_name": "com.indian.bite.user"
+          "package_name": "com.buddyserviceappzeto.restaurant"
         }
       },
-      "oauth_client": [
-        {
-          "client_id": "56653289892-7noa4693apu0to3p7erm8bnttgkggglh.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.indian.bite.user",
-            "certificate_hash": "ef253548161e191f29373f77319def6ad436b3a7"
-          }
-        },
-        {
-          "client_id": "56653289892-hj0500m40migck3q6ld64nb4981e5jh1.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.indian.bite.user",
-            "certificate_hash": "eafa3773d53abcec8d5f2093119cb978efce98b1"
-          }
-        },
-        {
-          "client_id": "56653289892-tt0imk1bgrvl38alje1kk1t9vblkg0pi.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
+      "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyCwrmt7PmLxHwApAi1it-qj0mwW_C4aXfY"
+          "current_key": "AIzaSyC9yyoOwDQSzXel4hizGD4jXS6ovJZzwV4"
         }
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "56653289892-tt0imk1bgrvl38alje1kk1t9vblkg0pi.apps.googleusercontent.com",
-              "client_type": 3
-            },
-            {
-              "client_id": "56653289892-d6ct9bm7mv6tn1pbinl676ql812gqpo8.apps.googleusercontent.com",
-              "client_type": 2,
-              "ios_info": {
-                "bundle_id": "com.go4food.driver"
-              }
-            }
-          ]
+          "other_platform_oauth_client": []
         }
       }
     },
     {
       "client_info": {
-        "mobilesdk_app_id": "1:56653289892:android:59a1148992c6ce62e18931",
+        "mobilesdk_app_id": "1:962903440763:android:a5159209525065882bd1de",
         "android_client_info": {
-          "package_name": "com.indians.bite.delivery"
+          "package_name": "com.buddyserviceappzeto.user"
         }
       },
-      "oauth_client": [
-        {
-          "client_id": "56653289892-oavsngo8mjvgog7rhrtrufro2dvp6bqs.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.indians.bite.delivery",
-            "certificate_hash": "eafa3773d53abcec8d5f2093119cb978efce98b1"
-          }
-        },
-        {
-          "client_id": "56653289892-tt0imk1bgrvl38alje1kk1t9vblkg0pi.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
+      "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyCwrmt7PmLxHwApAi1it-qj0mwW_C4aXfY"
+          "current_key": "AIzaSyC9yyoOwDQSzXel4hizGD4jXS6ovJZzwV4"
         }
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "56653289892-tt0imk1bgrvl38alje1kk1t9vblkg0pi.apps.googleusercontent.com",
-              "client_type": 3
-            },
-            {
-              "client_id": "56653289892-d6ct9bm7mv6tn1pbinl676ql812gqpo8.apps.googleusercontent.com",
-              "client_type": 2,
-              "ios_info": {
-                "bundle_id": "com.go4food.driver"
-              }
-            }
-          ]
+          "other_platform_oauth_client": []
         }
       }
     }

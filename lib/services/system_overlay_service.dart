@@ -4,7 +4,7 @@
 // /// Service to manage system-level overlay that works over other apps
 // class SystemOverlayService {
 //   static const MethodChannel _channel =
-//       MethodChannel('com.indians.bite.delivery/overlay');
+//       MethodChannel('com.buddyserviceappzeto.driver/overlay');
 
 //   /// Check if overlay permission is granted
 //   static Future<bool> checkOverlayPermission() async {

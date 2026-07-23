@@ -120,7 +120,7 @@ class AppConfig {
 
   // ==================== API CONFIGURATION ====================
   // Base URL for API endpoints (update this with your actual API base URL)
-  static const String apiBaseUrl = 'https://theindianbite.com/api';
+  static const String apiBaseUrl = 'https://sooperbuddy.in/api';
 
   // ==================== SPLASH SCREEN ====================
   static const int splashDurationSeconds = 2;

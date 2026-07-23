@@ -58,11 +58,11 @@ class ApiService {
 
       final requestBody = <String, dynamic>{
         'token': token,
-        'fcmToken': token,
-        'platform': platformValue,
-        'appRole': role,
-        'appType': role,
-        'role': role,
+        // 'fcmToken': token,
+        'platform': 'mobile',
+        // 'appRole': role,
+        // 'appType': role,
+        // 'role': role,
         if (phone != null && phone.isNotEmpty) 'phone': phone,
       };
 
