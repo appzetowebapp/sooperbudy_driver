@@ -57,7 +57,7 @@ class AppConfig {
 
   // ==================== WEB URL CONFIGURATION ====================
   // ⚠️ CHANGE THIS URL TO YOUR WEB APPLICATION ⚠️
-  static const String webUrl = 'https://sooperbuddy.in/driver/login';
+  static const String webUrl = 'https://sooperbuddy.in/driver/';
 
   /// Role sent with FCM token registration so the backend can target this device.
   static String get appRole {

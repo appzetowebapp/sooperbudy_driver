@@ -2521,6 +2521,74 @@ class _WebViewScreenState extends State<WebViewScreen>
     }
   }
 
+  Future<void> _injectFileInputInterceptorScript(InAppWebViewController controller) async {
+    try {
+      const script = r"""
+        (function() {
+          if (window.__fileInputInterceptorInstalled) {
+            return;
+          }
+          window.__fileInputInterceptorInstalled = true;
+
+          document.addEventListener('click', function(e) {
+            var target = e.target;
+            if (target && target.tagName === 'INPUT' && target.type === 'file') {
+              e.preventDefault();
+              e.stopPropagation();
+              
+              if (!target.id) {
+                target.id = 'file-input-' + Math.random().toString(36).substr(2, 9);
+              }
+              
+              var isCamera = target.hasAttribute('capture');
+              var handlerName = isCamera ? 'openCamera' : 'openGallery';
+              
+              if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                window.flutter_inappwebview.callHandler(handlerName).then(function(result) {
+                  if (result && result.success) {
+                     window.setFileInputFromBase64(target.id, result.base64, result.fileName, result.mimeType);
+                  }
+                });
+              }
+            }
+          }, true);
+          
+          window.setFileInputFromBase64 = function(inputId, base64Data, filename, mimeType) {
+             try {
+                var inputElement = document.getElementById(inputId);
+                if (!inputElement) return false;
+                
+                var byteCharacters = atob(base64Data);
+                var byteNumbers = new Array(byteCharacters.length);
+                for (var i = 0; i < byteCharacters.length; i++) {
+                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                }
+                var byteArray = new Uint8Array(byteNumbers);
+                var blob = new Blob([byteArray], {type: mimeType});
+                
+                var file = new File([blob], filename, {type: mimeType, lastModified: new Date().getTime()});
+                
+                var dataTransfer = new DataTransfer();
+                dataTransfer.items.add(file);
+                
+                inputElement.files = dataTransfer.files;
+                
+                var event = new Event('change', { bubbles: true });
+                inputElement.dispatchEvent(event);
+                return true;
+             } catch(err) {
+                console.error(err);
+                return false;
+             }
+          };
+        })();
+      """;
+      await controller.evaluateJavascript(source: script);
+    } catch (e) {
+      debugPrint('Error injecting file input interceptor: $e');
+    }
+  }
+
   /// Inject JavaScript to intercept API requests and capture POST bodies and RESPONSES
   Future<void> _injectApiInterceptorScript(
       InAppWebViewController controller) async {
@@ -3615,6 +3683,38 @@ class _WebViewScreenState extends State<WebViewScreen>
                         _webViewController = controller;
                         debugPrint('✅ WebView created');
 
+                        controller.addJavaScriptHandler(
+                          handlerName: 'openGallery',
+                          callback: (args) async {
+                            final ImagePicker picker = ImagePicker();
+                            try {
+                              final XFile? image = await picker.pickImage(
+                                source: ImageSource.gallery,
+                                imageQuality: 80,
+                              );
+
+                              if (image != null) {
+                                final bytes = await image.readAsBytes();
+                                final base64String = base64Encode(bytes);
+
+                                // MIME type is dynamically created based on extension or fallback
+                                String mimeType = 'image/jpeg';
+                                if (image.name.toLowerCase().endsWith('.png')) mimeType = 'image/png';
+
+                                return {
+                                  'success': true,
+                                  'base64': base64String,
+                                  'mimeType': mimeType,
+                                  'fileName': image.name,
+                                };
+                              }
+                            } catch (e) {
+                              debugPrint('Error in openGallery handler: $e');
+                            }
+                            return {'success': false};
+                          },
+                        );
+
                         // The website JS may call 'stopOrderAlertSound' directly on button tap
                         // (before the API call completes). We intentionally ignore this —
                         // the ringtone must only stop after a confirmed API success (HTTP 200/201)
@@ -3777,7 +3877,7 @@ class _WebViewScreenState extends State<WebViewScreen>
                             try {
                               final XFile? image = await picker.pickImage(
                                 source: ImageSource.camera,
-                                imageQuality: 80,
+                                imageQuality: 50,
                               );
 
                               if (image != null) {
@@ -3811,7 +3911,7 @@ class _WebViewScreenState extends State<WebViewScreen>
                             try {
                               final XFile? image = await picker.pickImage(
                                 source: ImageSource.gallery,
-                                imageQuality: 80,
+                                imageQuality: 50,
                               );
 
                               if (image != null) {
@@ -3897,6 +3997,7 @@ class _WebViewScreenState extends State<WebViewScreen>
                         await _injectLinkInterceptorScript(controller);
                         await _injectApiInterceptorScript(controller);
                         await _injectBlobInterceptorScript(controller);
+                        await _injectFileInputInterceptorScript(controller);
 
                         // Force-resume any AudioContext instances the site
                         // created during initialisation.  At this point the
